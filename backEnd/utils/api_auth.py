@@ -1,48 +1,97 @@
 import os
+from backEnd.database.get_from_data import get_user_credentials
+from backEnd.database.validation_data import is_token_valid
+from datetime import datetime
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
-def create_google_calendar_service(client_secrets_file, api_name,api_version,*scopes, prefix=''):
-    CLIENT_SECRETS_FILE = client_secrets_file
-    API_NAME = api_name
-    API_VERSION = api_version
-    SCOPES = [scope for scope in scopes]
-
-    creds =None
-    working_dir = os.getcwd()
-    token_dir = 'token_files'
-    token_file = f'token_{API_NAME}_{API_VERSION}{prefix}.json'
-    if not os.path.exists(os.path.join(working_dir, token_dir)):
-        os.mkdir(os.path.join(working_dir, token_dir))
+def refresh_user_token(user_id, service_name):
+    """
+    Refreshes an expired Google OAuth token using the refresh token.
     
-    if os.path.exists(os.path.join(working_dir, token_dir, token_file)):
-        creds = Credentials.from_authorized_user_file(os.path.join(working_dir, token_dir, token_file), SCOPES)
+    Parameters:
+    - user_id (int): The ID of the user.
+    - service_name (str): The name of the service (e.g., 'calendar').
+    
+    Returns:
+    - Credentials object: The newly refreshed Credentials object, or None on failure.
+    """
+    db_service_name = f'google_{service_name}'
+    
+    # 1. Retrieve the stored credentials including the refresh token
+    creds_data = get_user_credentials(user_id, db_service_name)
+    
+    if not creds_data or not creds_data.get('refresh_token'):
+        print(f"No refresh token found for user {user_id} and service {db_service_name}.")
+        return None
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        with open(os.path.join(working_dir, token_dir, token_file), 'w') as token:
-            token.write(creds.to_json())
     try:
-        service = build(API_NAME, API_VERSION, credentials=creds, static_discovery=False)
-        print(API_NAME,API_VERSION,'service created successfully')
-        return service
+        # 2. Create a Credentials object from the stored data
+        creds = Credentials(
+            token=creds_data['access_token'],
+            refresh_token=creds_data['refresh_token'],
+            token_uri='https://oauth2.googleapis.com/token',
+            scopes=creds_data['scopes']
+        )
+        
+        # Force the refresh flow by setting expired=True
+        creds.expired = True 
+        
+        # 3. Perform the token refresh using a Request object
+        creds.refresh(Request())
+        
+        # 4. Save the new access token and expiry time back to the database
+        # creds.expiry is a datetime object, converting to ISO format for database TIMESTAMP storage.
+        token_expiry_str = creds.expiry.isoformat()
+        
+        success = save_user_credentials(
+            user_id=user_id,
+            service_name=db_service_name,
+            access_token=creds.token,
+            # Refresh token may or may not be returned on refresh, so we reuse the original one
+            refresh_token=creds.refresh_token, 
+            token_expiry=token_expiry_str,
+            scopes=creds.scopes
+        )
+        
+        if success:
+            print(f"Token for user {user_id} and service {db_service_name} refreshed and saved successfully.")
+            return creds
+        else:
+            print(f"Failed to save refreshed token for user {user_id} and service {db_service_name}.")
+            return None
+            
     except Exception as e:
-        print('Unable to connect.')
-        print(e)
-        print(f'Failed to create service for {API_NAME} ')
-        os.remove(os.path.join(working_dir, token_dir, token_file))
+        print(f"Error refreshing token for user {user_id}: {e}")
         return None
 
 
-# from swarms.models import Gemini
-# from swarms.agents import Agent
-# gemini_model = Gemini(
-#     gemini_api_key=os.getenv("GEMINI_API_KEY") 
-# )
+
+def create_google_calendar_service(user_id, service_name='calendar', service_version='v3'):
+
+    creds_data = get_user_credentials(user_id, f'google_{service_name}')
+    
+    if not creds_data:
+        return None
+    
+    if not is_token_valid(user_id, f'google_{service_name}'):
+        creds = refresh_user_token(user_id, service_name)
+        if not creds:
+            return None
+    else:
+        
+        creds = Credentials(
+            token=creds_data['access_token'],
+            refresh_token=creds_data['refresh_token'],
+            token_uri='https://oauth2.googleapis.com/token',
+            scopes=creds_data['scopes']
+        )
+    try:
+        service = build(service_name, service_version, credentials=creds)
+        return service
+    except Exception as e:
+        print(f"Error building service: {e}")
+        return None
+
