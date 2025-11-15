@@ -15,7 +15,6 @@ __pycache__/
 
 frontEnd/.env
 backEnd/files/token_calendar_v3.json
-backEnd/token_files/token_calendar_v3.json
-frontEnd/token_files/token_calendar_v3.json
-
-
+backEnd\token_files\token_calendar_v3.json
+backEnd\client-secret.json
+frontEnd\token_files\token_calendar_v3.json
