@@ -1,19 +1,18 @@
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv 
-from calendar_tools import create_calendar, list_calendar_list, list_calendar_events, insert_calendar_event, get_today_date
-from history import load_history, save_history
+from services.calendar_service import create_calendar, list_calendar_list, list_calendar_events, insert_calendar_event, get_today_date
+from model.gemini_auth import client
+
 from utils.functionTools import (
     create_calendar_function,
     create_calendar_event_function,
     list_calendar_events_function,
     list_calendar_list_function
 )
-load_dotenv()
 
 
 
-def create_chat_session(client_start):
+def create_chat_session(client_start,raw_history):
     """Create a new chat session with the Gemini model."""
     tools = types.Tool(function_declarations=[
         create_calendar_function,
@@ -24,31 +23,44 @@ def create_chat_session(client_start):
     current_date = get_today_date()
 
     system_instruction = f"""
-    You are a calendar assistant for a user in the Asia/Jerusalem timezone.
+        You are a calendar assistant for a user in the Asia/Jerusalem timezone.
 
-    IMPORTANT DATE HANDLING:
-    Today's date is {current_date}. When users say:
-    - "today" → use {current_date}
-    - "tomorrow" → calculate tomorrow's date
-    - "next Monday" → calculate the next Monday
-    - "in 3 days" → calculate 3 days from today
+        IMPORTANT DATE HANDLING:
+        Today's date is {current_date}. When users say:
+        - "today" → use {current_date}
+        - "tomorrow" → calculate tomorrow's date
+        - "next Monday" → calculate the next Monday
+        - "in 3 days" → calculate 3 days from today
 
-    All datetime strings must be in ISO 8601 format with timezone:
-    Format: YYYY-MM-DDTHH:MM:SS+02:00
-    Example: 2025-11-01T17:00:00+02:00
+        All datetime strings must be in ISO 8601 format with timezone:
+        Format: YYYY-MM-DDTHH:MM:SS+02:00
+        Example: 2025-11-01T17:00:00+02:00
 
-    When users say times like "at 5" or "5pm", convert to 24-hour format:
-    - "at 5" or "5pm" → 17:00:00
-    - "at 5am" → 05:00:00
-    - "at noon" → 12:00:00
-    """
+        When users say times like "at 5" or "5pm", convert to 24-hour format:
+        - "at 5" or "5pm" → 17:00:00
+        - "at 5am" → 05:00:00
+        - "at noon" → 12:00:00
+
+        IMPORTANT CALENDAR NAME HANDLING:
+        - Users might use shortened names (e.g., "Cal" instead of "Cal-work")
+        - If a calendar name seems incomplete or doesn't exist, first call list_calendar_list to see available calendars
+        - Then ask the user to clarify which calendar they meant
+        - Suggest similar calendar names if available
+        - Be helpful and conversational, don't just return an error
+
+        Examples:
+        User: "Schedule meeting in Cal"
+        You should: Check if "Cal" exists, if not, list calendars like "Cal-work" and ask: "I found a calendar called 'Cal-work'. Did you mean that one?"
+
+        User: "Add event to Work calendar"
+        You should: Check for calendars containing "work" (case-insensitive) and suggest matches
+        """
 
     config = types.GenerateContentConfig(
         tools=[tools],
         system_instruction=system_instruction
     )    
     
-    raw_history = load_history('Gemini_history.json')
     gemini_history = []
     
     for turn in raw_history:

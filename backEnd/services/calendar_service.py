@@ -1,5 +1,5 @@
 import json 
-from google_api import create_google_calendar_service
+from utils.api_auth import create_google_calendar_service
 from datetime import datetime, timedelta,date
 
 client_secret = 'client-secret.json'
@@ -146,8 +146,14 @@ def insert_calendar_event(calendar_name, summary, start_datetime, description=No
     Returns:
     - The created event.
     """
-    calendar_id = get_CalenderId(calendar_name,list_calendar_list)
-
+    try: 
+        calendar_id = get_CalenderId(calendar_name,list_calendar_list)
+    except ValueError as e:
+        available_calendars = list_calendar_list()
+        calendar_names = [cal['name'] for cal in available_calendars]
+        error_msg = f"Calendar '{calendar_name}' not found. Available calendars: {', '.join(calendar_names)}"
+        return {"error": error_msg, "available_calendars": calendar_names}
+    
     if end_datetime is None:
         start_dt = datetime.fromisoformat(start_datetime.replace('+02:00', ''))
         end_dt = start_dt + timedelta(hours=1)

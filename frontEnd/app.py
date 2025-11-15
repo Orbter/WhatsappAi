@@ -1,36 +1,124 @@
+
 import streamlit as st
-from agents import create_chat_session, send_message
-from calendar_tools import get_today_date
-from google import genai
-from history import load_history,save_history
-import json
+import requests
+from datetime import datetime
+
+# Backend API URL
+BACKEND_URL = "http://localhost:8000"  # Change this when deployed
+
+
+def call_backend_chat(user_id: str, message: str) -> dict:
+    """
+    Call the backend API to process a chat message.
+    
+    Args:
+        user_id: User identifier
+        message: User's message
+    
+    Returns:
+        Response from backend
+    """
+    try:
+        response = requests.post(
+            f"{BACKEND_URL}/chat",
+            json={
+                "user_id": user_id,
+                "message": message
+            },
+            timeout=30  # 30 second timeout
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to connect to backend: {e}")
+        return None
+
+
+def get_conversation_history(user_id: str) -> list:
+    """
+    Get conversation history from backend.
+    
+    Args:
+        user_id: User identifier
+    
+    Returns:
+        List of messages
+    """
+    try:
+        response = requests.get(
+            f"{BACKEND_URL}/history/{user_id}",
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("messages", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to load history: {e}")
+        return []
+
+
+def clear_conversation_history(user_id: str) -> bool:
+    """
+    Clear conversation history for a user.
+    
+    Args:
+        user_id: User identifier
+    
+    Returns:
+        True if successful
+    """
+    try:
+        response = requests.delete(
+            f"{BACKEND_URL}/history/{user_id}",
+            timeout=10
+        )
+        response.raise_for_status()
+        return True
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to clear history: {e}")
+        return False
+
+
+def check_backend_health() -> bool:
+    """
+    Check if backend is running.
+    
+    Returns:
+        True if backend is healthy
+    """
+    try:
+        response = requests.get(f"{BACKEND_URL}/health", timeout=5)
+        return response.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
 
 
 def main():
     st.set_page_config(
-        page_title="Orbter calendar AI Agent",
+        page_title="Orbter Calendar AI Agent",
         page_icon="📅",
         layout="wide"
     )
     
-    st.title("Orbter calendar AI Agent 📅")
-    st.markdown("Ask me to create calendars, add events, or view your schedule!")
-    if 'gemini_client' not in st.session_state:
-        st.session_state.gemini_client = genai.Client()
-    # Initialize chat session in session state
-    if 'chat_session' not in st.session_state:
-        try:
-            st.session_state.chat_session = create_chat_session(st.session_state.gemini_client)
-            st.session_state.initialized = True
-        except Exception as e:
-            st.error(f"Failed to initialize chat: {str(e)}")
-            st.error("Please make sure you have set up your Google API credentials and Gemini API key.")
-            st.session_state.initialized = False
+    st.title("Orbter Calendar AI Agent 📅")
+    st.markdown("*Now powered by FastAPI backend!*")
+    
+    # Check backend health
+    if not check_backend_health():
+        st.error("⚠️ Backend is not running!")
+        st.info("Please start the backend server:")
+        st.code("cd backend\npython main.py")
+        st.stop()
+    
+    # Initialize session state for user ID
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = f"streamlit_user_{datetime.now().timestamp()}"
     
     # Initialize messages in session state
     if 'messages' not in st.session_state:
         st.session_state.messages = []
     
+    # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -38,18 +126,13 @@ def main():
             # Show function call info if present
             if "function_call" in message and message["function_call"]:
                 with st.expander("🔧 Function Call Details"):
-                    st.write(f"**Function:** {message['function_call']['name']}")
-                    st.json(message['function_call']['args'])
+                    st.write(f"**Function:** {message['function_call']}")
     
     # Chat input
     if prompt := st.chat_input("Ask me anything about your calendar..."):
-        if not st.session_state.initialized:
-            st.error("Chat session not initialized. Please check your API credentials and refresh the page.")
-            return
-        
         # Add user message to chat history
         st.session_state.messages.append({
-            "role": "user", 
+            "role": "user",
             "content": prompt
         })
         
@@ -57,37 +140,43 @@ def main():
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # Get assistant response
+        # Get assistant response from backend
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                try:
-                    response_text, function_call_info = send_message(
-                        st.session_state.chat_session, 
-                        prompt
-                    )
+                # Call backend API
+                response_data = call_backend_chat(
+                    user_id=st.session_state.user_id,
+                    message=prompt
+                )
+                
+                if response_data and response_data.get("success"):
+                    response_text = response_data.get("response", "No response")
+                    function_called = response_data.get("function_called")
                     
-                    if function_call_info:
+                    # Show function call if present
+                    if function_called:
                         with st.expander("🔧 Function Call Details"):
-                            st.write(f"**Function:** {function_call_info['name']}")
-                            st.json(function_call_info['args'])
+                            st.write(f"**Function:** {function_called}")
                     
                     # Display assistant message
                     st.markdown(response_text)
                     
-                    # Add assistant message to chat history
-                    assistant_message = {"role": "assistant", "content": response_text, "function_call": function_call_info}
-                    st.session_state.messages.append(assistant_message)
-                    history_turn = {"user": prompt, "assistant": response_text}
-                    save_history('Gemini_history.json', history_turn)
-                except Exception as e:
-                    error_message = f"❌ An error occurred: {str(e)}"
-                    st.error(error_message)
+                    # Add to chat history
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": error_message,
+                        "content": response_text,
+                        "function_call": function_called
+                    })
+                else:
+                    error_msg = "❌ Failed to get response from backend"
+                    st.error(error_msg)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_msg,
                         "function_call": None
                     })
     
+    # Sidebar
     with st.sidebar:
         st.header("ℹ️ About")
         st.markdown("""
@@ -107,23 +196,71 @@ def main():
         
         st.divider()
         
-        if st.button("🗑️ Clear Chat History"):
-            st.session_state.messages = load_history('Gemini_history.json')
-            st.session_state.chat_session = create_chat_session(st.session_state.gemini_client)
-            st.rerun()
+        # Backend status
+        st.subheader("🔗 Backend Status")
+        if check_backend_health():
+            st.success("✅ Connected")
+            st.caption(f"API: {BACKEND_URL}")
+        else:
+            st.error("❌ Disconnected")
         
         st.divider()
         
-        try:
-            current_date = get_today_date()
-            st.caption(f"📅 Today's date: {current_date}")
-        except:
-            st.caption("📅 Date: Unable to fetch")
+        # User info
+        st.subheader("👤 User Info")
+        st.caption(f"User ID: {st.session_state.user_id[:20]}...")
+        
+        st.divider()
+        
+        # Clear history button
+        if st.button("🗑️ Clear Chat History"):
+            if clear_conversation_history(st.session_state.user_id):
+                st.session_state.messages = []
+                st.success("History cleared!")
+                st.rerun()
+        
+        # Load history button
+        if st.button("📥 Load History from Backend"):
+            history = get_conversation_history(st.session_state.user_id)
+            if history:
+                st.session_state.messages = [
+                    {
+                        "role": msg["role"],
+                        "content": msg["message"],
+                        "function_call": msg.get("function_call")
+                    }
+                    for msg in history
+                ]
+                st.success(f"Loaded {len(history)} messages!")
+                st.rerun()
+        
+        st.divider()
         
         st.caption("🌍 Timezone: Asia/Jerusalem")
+        st.caption("🤖 Powered by Gemini 2.5 Flash")
+        st.caption("⚡ FastAPI Backend")
         
         st.divider()
-        st.caption("Powered by Google Gemini 2.5 Flash")
+        
+        # Info about the new architecture
+        with st.expander("🏗️ New Architecture"):
+            st.markdown("""
+            **Before:**
+            Streamlit → Google Calendar
+            (Everything in one place)
+            
+            **Now:**
+            Streamlit → FastAPI Backend → Google Calendar
+                                 ↓
+                              Database
+            
+            **Benefits:**
+            - 🌐 Can add WhatsApp easily
+            - 👥 Multi-user support
+            - 💾 Proper database
+            - 🔒 Better security
+            - 📈 Scalable
+            """)
 
 
 if __name__ == "__main__":

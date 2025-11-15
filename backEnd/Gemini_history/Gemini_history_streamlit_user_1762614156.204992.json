@@ -1,0 +1,10 @@
+[
+    {
+        "user": "Hey can you schedule an meeting in two days at 8:30 am named me secound day with advisor in Cal",
+        "assistant": "I found a calendar called 'Cal-work'. Did you mean that one?"
+    },
+    {
+        "user": "the cal is a part of the title, but yeah scaudle it in that one",
+        "assistant": "OK. I've scheduled \"me second day with advisor in Cal\" in your 'Cal-work' calendar for November 10, 2025, at 8:30 AM."
+    }
+]
