@@ -112,7 +112,7 @@ def main():
     
     # Initialize session state for user ID
     if 'user_id' not in st.session_state:
-        st.session_state.user_id = f"streamlit_user_{datetime.now().timestamp()}"
+        st.session_state.user_id = "test_user_1"
     
     # Initialize messages in session state
     if 'messages' not in st.session_state:
@@ -178,6 +178,30 @@ def main():
     
     # Sidebar
     with st.sidebar:
+        st.header("Authentication")
+        
+        login_url = f"{BACKEND_URL}/auth/login?user_id={st.session_state.user_id}"
+        
+        st.markdown(f'''
+            <a href="{login_url}" target="_blank">
+                <button style="
+                    width: 100%;
+                    background-color: #FF4B4B;
+                    color: white;
+                    border: none;
+                    padding: 10px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-weight: bold;
+                ">
+                🔐 Login with Google
+                </button>
+            </a>
+            ''', unsafe_allow_html=True)
+            
+        st.caption("Click above to authorize Google Calendar access.")
+        st.divider()
+
         st.header("ℹ️ About")
         st.markdown("""
         This AI agent can help you:

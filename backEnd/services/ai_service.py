@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+# Note: We are importing the logic, but we will pass user_id dynamically now
 from services.calendar_service import create_calendar, list_calendar_list, list_calendar_events, insert_calendar_event, get_today_date
 from model.gemini_auth import client
 
@@ -10,9 +11,7 @@ from utils.functionTools import (
     list_calendar_list_function
 )
 
-
-
-def create_chat_session(client_start,raw_history):
+def create_chat_session(client_start, raw_history):
     """Create a new chat session with the Gemini model."""
     tools = types.Tool(function_declarations=[
         create_calendar_function,
@@ -27,33 +26,12 @@ def create_chat_session(client_start,raw_history):
 
         IMPORTANT DATE HANDLING:
         Today's date is {current_date}. When users say:
-        - "today" → use {current_date}
-        - "tomorrow" → calculate tomorrow's date
-        - "next Monday" → calculate the next Monday
-        - "in 3 days" → calculate 3 days from today
-
-        All datetime strings must be in ISO 8601 format with timezone:
+        - "today" -> use {current_date}
+        - "tomorrow" -> calculate tomorrow's date
+        
         Format: YYYY-MM-DDTHH:MM:SS+02:00
-        Example: 2025-11-01T17:00:00+02:00
-
-        When users say times like "at 5" or "5pm", convert to 24-hour format:
-        - "at 5" or "5pm" → 17:00:00
-        - "at 5am" → 05:00:00
-        - "at noon" → 12:00:00
-
-        IMPORTANT CALENDAR NAME HANDLING:
-        - Users might use shortened names (e.g., "Cal" instead of "Cal-work")
-        - If a calendar name seems incomplete or doesn't exist, first call list_calendar_list to see available calendars
-        - Then ask the user to clarify which calendar they meant
-        - Suggest similar calendar names if available
-        - Be helpful and conversational, don't just return an error
-
-        Examples:
-        User: "Schedule meeting in Cal"
-        You should: Check if "Cal" exists, if not, list calendars like "Cal-work" and ask: "I found a calendar called 'Cal-work'. Did you mean that one?"
-
-        User: "Add event to Work calendar"
-        You should: Check for calendars containing "work" (case-insensitive) and suggest matches
+        
+        If a calendar name seems incomplete, list calendars first then ask.
         """
 
     config = types.GenerateContentConfig(
@@ -61,17 +39,7 @@ def create_chat_session(client_start,raw_history):
         system_instruction=system_instruction
     )    
     
-    gemini_history = []
-    
-    for turn in raw_history:
-        gemini_history.append({
-            "role": "user",
-            "parts": [{"text": turn["user"]}]
-        })
-        gemini_history.append({
-            "role": "model",
-            "parts": [{"text": turn["assistant"]}]
-        })
+    gemini_history = raw_history
     
     chatGemini = client_start.chats.create(
         model="gemini-2.5-flash", 
@@ -80,67 +48,72 @@ def create_chat_session(client_start,raw_history):
     )
     return chatGemini
 
-def process_function_call(function_call):
+def process_function_call(user_id, function_call):
     """
-    Process a function call from the Gemini model and return the response.
-    
-    Parameters:
-    - function_call: The function call object from Gemini response.
-    
-    Returns:
-    - dict: The function response data, or None if function execution failed.
+    Process a function call.
+    IMPORTANT: We now pass user_id to every calendar function.
     """
     function_response_data = None
+    args = dict(function_call.args)
     
-    if function_call.name == 'create_calendar':
-        function_response_data = create_calendar(**function_call.args)
+    # Inject user_id into the arguments for the calendar service
+    args['user_id'] = user_id
     
-    elif function_call.name == 'insert_calendar_event':
-        function_response_data = insert_calendar_event(**function_call.args)
+    try:
+        if function_call.name == 'create_calendar':
+            function_response_data = create_calendar(**args)
+        
+        elif function_call.name == 'insert_calendar_event':
+            function_response_data = insert_calendar_event(**args)
 
-    elif function_call.name == 'list_calendar_events':
-        my_events = list_calendar_events(**function_call.args)
-        function_response_data = {"my_events": my_events}
-    
-    elif function_call.name == 'list_calendar_list':
-        calendars = list_calendar_list()
-        function_response_data = {"calendars": calendars}
+        elif function_call.name == 'list_calendar_events':
+            my_events = list_calendar_events(**args)
+            function_response_data = {"my_events": my_events}
+        
+        elif function_call.name == 'list_calendar_list':
+            # list_calendar_list only needs user_id (already in args if we add it, or passed directly)
+            calendars = list_calendar_list(user_id=user_id)
+            function_response_data = {"calendars": calendars}
+            
+    except Exception as e:
+        function_response_data = {"error": str(e)}
     
     return function_response_data
 
 
-def send_message(chat_session, user_message):
+def send_message(chat_session, user_message, user_id):
     """
-    Send a message to the chat session and handle function calls.
-    
-    Parameters:
-    - chat_session: The Gemini chat session.
-    - user_message: The user's message string or function response.
-    
-    Returns:
-    - tuple: (response_text, function_call_info) where function_call_info is a dict or None.
+    Send a message and handle function calls.
+    ADDED: user_id argument to pass to tools.
     """
     response = chat_session.send_message(user_message)
     
-    if response.candidates[0].content.parts[0].function_call:
-        function_call = response.candidates[0].content.parts[0].function_call
+    try:
+        part = response.candidates[0].content.parts[0]
         
-        function_call_info = {
-            "name": function_call.name,
-            "args": dict(function_call.args)
-        }
-        
-        function_response_data = process_function_call(function_call)
-        
-        if function_response_data is not None:
-            function_response_part = types.Part.from_function_response(
-                name=function_call.name,
-                response=function_response_data
-            )
-            response = chat_session.send_message(function_response_part)
-            return response.text, function_call_info
+        if part.function_call:
+            function_call = part.function_call
+            
+            function_call_info = {
+                "name": function_call.name,
+                "args": dict(function_call.args)
+            }
+            
+            function_response_data = process_function_call(user_id, function_call)
+            
+            if function_response_data is not None:
+                function_response_part = types.Part.from_function_response(
+                    name=function_call.name,
+                    response=function_response_data
+                )
+                # Send the tool output back to Gemini
+                response = chat_session.send_message(function_response_part)
+                return response.text, function_call_info
+            else:
+                return f"Error: Could not execute function {function_call.name}", function_call_info
         else:
-            return f"Error: Could not execute function {function_call.name}", function_call_info
-    else:
-        return response.text, None
-    
+            return response.text, None
+            
+    except Exception as e:
+        print(f"Error in send_message: {e}")
+        return "Sorry, something went wrong processing your request.", None

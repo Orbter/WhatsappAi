@@ -1,4 +1,4 @@
-from connection import get_connection
+from .connection import get_connection
 from sqlmodel import Field, Relationship, SQLModel, create_engine, Session
 
 

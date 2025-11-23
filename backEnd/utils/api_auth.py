@@ -1,6 +1,6 @@
 import os
-from backEnd.database.get_from_data import get_user_credentials
-from backEnd.database.validation_data import is_token_valid
+from database.get_from_data import get_user_google_creds
+from database.validation_data import is_token_valid
 from datetime import datetime
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -21,7 +21,7 @@ def refresh_user_token(user_id, service_name):
     db_service_name = f'google_{service_name}'
     
     # 1. Retrieve the stored credentials including the refresh token
-    creds_data = get_user_credentials(user_id, db_service_name)
+    creds_data = get_user_google_creds(user_id, db_service_name)
     
     if not creds_data or not creds_data.get('refresh_token'):
         print(f"No refresh token found for user {user_id} and service {db_service_name}.")
@@ -46,7 +46,7 @@ def refresh_user_token(user_id, service_name):
         # creds.expiry is a datetime object, converting to ISO format for database TIMESTAMP storage.
         token_expiry_str = creds.expiry.isoformat()
         
-        success = save_user_credentials(
+        success = get_user_google_creds(
             user_id=user_id,
             service_name=db_service_name,
             access_token=creds.token,
@@ -69,29 +69,31 @@ def refresh_user_token(user_id, service_name):
 
 
 
-def create_google_calendar_service(user_id, service_name='calendar', service_version='v3'):
+def create_google_calendar_service(user_id, service_name='calendar', service_version='v3',scopes=None):
 
-    creds_data = get_user_credentials(user_id, f'google_{service_name}')
-    
+    # 1. Fetch stored credentials
+    creds_data = get_user_google_creds(user_id)
     if not creds_data:
         return None
-    
+
+    # 2. Refresh token if needed
     if not is_token_valid(user_id, f'google_{service_name}'):
         creds = refresh_user_token(user_id, service_name)
         if not creds:
             return None
     else:
-        
+        # 3. Build credentials object
         creds = Credentials(
-            token=creds_data['access_token'],
-            refresh_token=creds_data['refresh_token'],
-            token_uri='https://oauth2.googleapis.com/token',
-            scopes=creds_data['scopes']
+            token=creds_data["access_token"],
+            refresh_token=creds_data["refresh_token"],
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=creds_data["scopes"]
         )
+
+    # 4. Build and return calendar service
     try:
         service = build(service_name, service_version, credentials=creds)
         return service
     except Exception as e:
-        print(f"Error building service: {e}")
+        print(f"Error creating Google Calendar service: {e}")
         return None
-
